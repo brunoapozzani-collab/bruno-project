@@ -1,0 +1,14 @@
+.env
+.tmp/
+venv/
+output/
+__pycache__/
+*.pyc
+credentials.json
+token.json
+.DS_Store
+
+# Don't commit ledgers or local rules accidentally; the sample
+# config/categorias.xlsx is re-allowed below.
+*.xlsx
+!config/categorias.xlsx

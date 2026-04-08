@@ -1,0 +1,9 @@
+pandas
+openpyxl
+questionary
+rich
+reportlab
+python-dotenv
+dropbox
+pyinstaller
+streamlit

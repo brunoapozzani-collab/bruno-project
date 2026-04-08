@@ -1,0 +1,7 @@
+[server]
+# Allow uploading large ledgers (default is 200 MB).
+maxUploadSize = 500
+maxMessageSize = 500
+
+[browser]
+gatherUsageStats = false
