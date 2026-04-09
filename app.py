@@ -210,6 +210,39 @@ def bootstrap_rules_from_work(work_df: pd.DataFrame, col_desc: str, col_favoreci
     return len(added_rows), ambiguous
 
 
+_ADDRESS_RE_GLOBAL = re.compile(
+    r"\b(rua|r\.|av|av\.|avenida|alameda|al\.|travessa|trav\.|estrada|"
+    r"rodovia|rod\.|praca|praça|largo|viela|beco|quadra|lote|bloco|"
+    r"cep|n[º°]|num\.|numero|número)\b|\d{5}-?\d{3}",
+    re.IGNORECASE,
+)
+
+
+def categorize_descriptions(
+    descriptions: list[str], rules: list[dict]
+) -> list[str | None]:
+    """Apply the rule pipeline (descrição-priority then keyword) to a list of
+    descriptions. Returns one categoria per description, or None when no rule
+    matches. Used by the Section 2 preview."""
+    out: list[str | None] = []
+    for raw in descriptions:
+        text = strip_accents(raw or "")
+        is_addr = bool(_ADDRESS_RE_GLOBAL.search(raw or "")) if (raw or "").strip() else False
+        match = None
+        if not is_addr:
+            for r in rules:
+                if r["descricao"] and strip_accents(r["descricao"]) in text:
+                    match = r["categoria"]
+                    break
+        if match is None:
+            for r in rules:
+                if r["kw"] and strip_accents(r["kw"]) in text:
+                    match = r["categoria"]
+                    break
+        out.append(match)
+    return out
+
+
 def df_to_rules(df: pd.DataFrame) -> list[dict]:
     out = []
     for _, r in df.iterrows():
@@ -249,48 +282,6 @@ with st.sidebar:
     # Initialize rules in session state on first load using the bundled sample.
     if "rules_df" not in st.session_state:
         st.session_state.rules_df = load_categories_df()
-
-    # Importer: lets the user replace the editor content with their own file
-    rules_upload = st.file_uploader(
-        "📤 Importar regras (.xlsx)",
-        type=["xlsx"],
-        key="rules_uploader",
-        help="Carregue um arquivo .xlsx com as colunas palavra_chave, categoria, descricao.",
-    )
-    if rules_upload is not None:
-        # Guard: only process this upload once per file (avoid re-import on every rerun)
-        upload_sig = f"{rules_upload.name}-{rules_upload.size}"
-        if st.session_state.get("_last_rules_upload") != upload_sig:
-            try:
-                new_df = pd.read_excel(rules_upload)
-                new_df.columns = [c.lower() for c in new_df.columns]
-                # Validate: must contain at least 'categoria' AND one of palavra_chave/descricao
-                required_any = {"palavra_chave", "descricao"}
-                if "categoria" not in new_df.columns or not (required_any & set(new_df.columns)):
-                    st.error(
-                        "❌ Arquivo inválido. Um arquivo de regras precisa conter as colunas "
-                        "**categoria** e **palavra_chave** (ou **descricao**). Parece que você "
-                        "enviou um razão geral por engano — use a Seção 1 para carregar o razão."
-                    )
-                else:
-                    for col in ("palavra_chave", "categoria", "descricao"):
-                        if col not in new_df.columns:
-                            new_df[col] = ""
-                    new_df = new_df[["palavra_chave", "categoria", "descricao"]].fillna("")
-                    # Drop rows that have no categoria, or that have neither kw nor descricao
-                    mask = (new_df["categoria"].astype(str).str.strip() != "") & (
-                        (new_df["palavra_chave"].astype(str).str.strip() != "")
-                        | (new_df["descricao"].astype(str).str.strip() != "")
-                    )
-                    new_df = new_df[mask].reset_index(drop=True)
-                    if new_df.empty:
-                        st.warning("Nenhuma regra válida encontrada no arquivo.")
-                    else:
-                        st.session_state.rules_df = new_df
-                        st.session_state._last_rules_upload = upload_sig
-                        st.success(f"{len(new_df)} regra(s) importada(s).")
-            except Exception as e:
-                st.error(f"Não foi possível ler o arquivo: {e}")
 
     edited = st.data_editor(
         st.session_state.rules_df,
@@ -574,6 +565,62 @@ if mapping_ok:
                 )
         except Exception as e:
             st.warning(f"⚠️ Bootstrap automático falhou: {e}")
+
+# ============================================================
+# 2.5  PREVIEW — descrição → categoria
+# ============================================================
+if mapping_ok and rules:
+    st.header("🔍 Pré-visualização da categorização")
+    st.caption(
+        "Cada descrição da planilha foi comparada com a lista de regras na barra "
+        "lateral. Veja abaixo quantas linhas casaram com cada categoria e exemplos "
+        "de descrições. Edite uma regra na barra lateral e a tabela atualiza sozinha."
+    )
+
+    descs_all = work[col_desc].astype(str).tolist()
+    cats_all = categorize_descriptions(descs_all, rules)
+    n_total = len(cats_all)
+    n_matched = sum(1 for c in cats_all if c)
+    n_unmatched = n_total - n_matched
+
+    pcol1, pcol2, pcol3 = st.columns(3)
+    pcol1.metric("Linhas totais", f"{n_total:,}")
+    pcol2.metric("Casaram com regra", f"{n_matched:,}")
+    pcol3.metric("Sem categoria", f"{n_unmatched:,}")
+
+    # Group: categoria → list of sample descriptions
+    by_cat: dict[str, list[str]] = {}
+    for d, c in zip(descs_all, cats_all):
+        if c:
+            by_cat.setdefault(c, []).append(d)
+    if by_cat:
+        rows_preview = []
+        for cat in sorted(by_cat.keys()):
+            samples = by_cat[cat]
+            rows_preview.append({
+                "Categoria": cat,
+                "Linhas": len(samples),
+                "Exemplos de descrição": " · ".join(s[:60] for s in samples[:3]),
+            })
+        st.dataframe(
+            pd.DataFrame(rows_preview),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.warning(
+            "Nenhuma descrição da planilha casou com as regras atuais. "
+            "Edite a barra lateral para adicionar regras mais específicas."
+        )
+
+    if n_unmatched:
+        with st.expander(f"Ver até 20 descrições sem categoria ({n_unmatched:,} no total)"):
+            unmatched_samples = [d for d, c in zip(descs_all, cats_all) if not c][:20]
+            st.dataframe(
+                pd.DataFrame({"Descrição sem regra": unmatched_samples}),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 # ============================================================
 # 3. FILTERS
