@@ -152,8 +152,9 @@ with st.sidebar:
     st.caption(
         "Defina aqui o que cada palavra-chave significa. Ex: **maria → Aluguel**. "
         "O sistema procurará a palavra-chave (sem acento, sem caixa) na descrição e na "
-        "conta de cada linha do razão. Use *empresa* para limitar uma regra a uma empresa "
-        "específica (deixe vazio para aplicar a todas)."
+        "conta de cada linha do razão. Se você selecionou uma coluna de Empresa na "
+        "Seção 2, a empresa será detectada automaticamente da planilha — deixe o "
+        "campo *Empresa* das regras em branco."
     )
 
     # Initialize rules in session state on first load using the bundled sample.
@@ -188,7 +189,10 @@ with st.sidebar:
         column_config={
             "palavra_chave": st.column_config.TextColumn("Palavra-chave", required=True),
             "categoria":     st.column_config.TextColumn("Categoria",     required=True),
-            "empresa":       st.column_config.TextColumn("Empresa (opcional)"),
+            "empresa":       st.column_config.TextColumn(
+                "Empresa (opcional)",
+                help="Ignorado quando a planilha tem coluna de Empresa selecionada na Seção 2.",
+            ),
         },
         key="cat_editor",
     )
@@ -208,9 +212,10 @@ with st.sidebar:
     categorias_disponiveis = sorted({r["categoria"] for r in rules})
     st.caption(f"📌 {len(rules)} regra(s) ativa(s) · {len(categorias_disponiveis)} categoria(s).")
     st.caption(
-        "💡 **Dica:** se sua planilha não tem coluna de empresa, deixe a coluna "
-        "*Empresa (opcional)* em branco. Caso contrário a regra só se aplicará "
-        "às linhas daquela empresa."
+        "💡 **Dica:** se sua planilha tem coluna de empresa, selecione-a na Seção 2 "
+        "e deixe *Empresa (opcional)* em branco — a empresa de cada lançamento será "
+        "lida diretamente da planilha. Use *Empresa (opcional)* apenas quando a "
+        "planilha **não** tiver coluna de empresa."
     )
     st.caption(
         "⚠️ **As regras NÃO ficam salvas no servidor.** Use **Baixar regras** ao "
@@ -523,14 +528,16 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
         row_emp = str(row[col_empresa_eff]) if ledger_has_empresa else ""
         row_emp_n = strip_accents(row_emp)
         for rule in active_rules_for_match:
-            # If ledger has empresa column AND rule is scoped, enforce that scope
-            if ledger_has_empresa and rule["empresa"]:
-                if strip_accents(rule["empresa"]) != row_emp_n:
-                    continue
-            if strip_accents(rule["kw"]) in haystack:
-                # Empresa for output: rule's empresa wins; else row's empresa; else "Geral"
-                assigned = rule["empresa"] or row_emp or "Geral"
-                return rule["categoria"], assigned
+            # When the ledger has its own empresa column, the row's empresa is
+            # the source of truth — rules match purely by keyword and the
+            # rule's empresa field is ignored. Without an empresa column, fall
+            # back to the rule's empresa (or "Geral").
+            if ledger_has_empresa:
+                if strip_accents(rule["kw"]) in haystack:
+                    return rule["categoria"], (row_emp or "Geral")
+            else:
+                if strip_accents(rule["kw"]) in haystack:
+                    return rule["categoria"], (rule["empresa"] or "Geral")
         return None, None
 
     matched = filtered.apply(match_rule, axis=1)
