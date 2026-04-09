@@ -521,6 +521,8 @@ if mapping_ok:
                         return canon
             return "Outros"
 
+        # Keep the raw value for diagnostics before overwriting it.
+        work["_endereco_raw"] = work[col_empresa_eff].astype(str)
         work[col_empresa_eff] = work[col_empresa_eff].apply(_canon_address)
     elif col_empresa:
         col_empresa_eff = col_empresa
@@ -535,6 +537,38 @@ if mapping_ok:
     # is restricted to the fixed ALLOWED_CATEGORIES list. The Section 4
     # auto-suggester for unmatched rows still uses Claude, but constrained
     # to ALLOWED_CATEGORIES via suggest_categories().
+
+    # ----- Diagnostic: address bucketing -----
+    if col_endereco and "_endereco_raw" in work.columns:
+        st.subheader("🔧 Diagnóstico do agrupamento por endereço")
+        diag = (
+            work.groupby([col_empresa_eff, "_endereco_raw"])
+            .agg(linhas=("_valor_num", "size"), total=("_valor_num", "sum"))
+            .reset_index()
+            .rename(columns={col_empresa_eff: "Endereço (canônico)", "_endereco_raw": "Valor cru na planilha"})
+            .sort_values(["Endereço (canônico)", "linhas"], ascending=[True, False])
+        )
+        # Top-level summary
+        summary = (
+            work.groupby(col_empresa_eff)
+            .agg(linhas=("_valor_num", "size"), total=("_valor_num", "sum"))
+            .reset_index()
+            .rename(columns={col_empresa_eff: "Endereço (canônico)"})
+            .sort_values("total", ascending=False)
+        )
+        summary["total"] = summary["total"].map(fmt_brl)
+        st.caption("Resumo por endereço canônico (todos os lançamentos do arquivo, antes dos filtros):")
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+        with st.expander("Ver mapeamento de cada valor cru → endereço canônico"):
+            diag_show = diag.copy()
+            diag_show["total"] = diag_show["total"].map(fmt_brl)
+            st.dataframe(diag_show, use_container_width=True, hide_index=True)
+            st.caption(
+                "Se algum valor cru que deveria ser **Alameda Gabriel 470** está "
+                "caindo em **Outros** (ou em outro endereço), me diga o texto exato "
+                "que aparece na coluna **Valor cru na planilha** e eu adiciono ao "
+                "alias."
+            )
 
 # ============================================================
 # 2.5  PREVIEW — descrição → categoria
