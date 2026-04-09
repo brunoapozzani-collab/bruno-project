@@ -258,18 +258,39 @@ with st.sidebar:
         help="Carregue um arquivo .xlsx com as colunas palavra_chave, categoria, descricao.",
     )
     if rules_upload is not None:
-        try:
-            new_df = pd.read_excel(rules_upload)
-            new_df.columns = [c.lower() for c in new_df.columns]
-            for col in ("palavra_chave", "categoria", "descricao"):
-                if col not in new_df.columns:
-                    new_df[col] = ""
-            st.session_state.rules_df = (
-                new_df[["palavra_chave", "categoria", "descricao"]].fillna("")
-            )
-            st.success(f"{len(st.session_state.rules_df)} regra(s) importada(s).")
-        except Exception as e:
-            st.error(f"Não foi possível ler o arquivo: {e}")
+        # Guard: only process this upload once per file (avoid re-import on every rerun)
+        upload_sig = f"{rules_upload.name}-{rules_upload.size}"
+        if st.session_state.get("_last_rules_upload") != upload_sig:
+            try:
+                new_df = pd.read_excel(rules_upload)
+                new_df.columns = [c.lower() for c in new_df.columns]
+                # Validate: must contain at least 'categoria' AND one of palavra_chave/descricao
+                required_any = {"palavra_chave", "descricao"}
+                if "categoria" not in new_df.columns or not (required_any & set(new_df.columns)):
+                    st.error(
+                        "❌ Arquivo inválido. Um arquivo de regras precisa conter as colunas "
+                        "**categoria** e **palavra_chave** (ou **descricao**). Parece que você "
+                        "enviou um razão geral por engano — use a Seção 1 para carregar o razão."
+                    )
+                else:
+                    for col in ("palavra_chave", "categoria", "descricao"):
+                        if col not in new_df.columns:
+                            new_df[col] = ""
+                    new_df = new_df[["palavra_chave", "categoria", "descricao"]].fillna("")
+                    # Drop rows that have no categoria, or that have neither kw nor descricao
+                    mask = (new_df["categoria"].astype(str).str.strip() != "") & (
+                        (new_df["palavra_chave"].astype(str).str.strip() != "")
+                        | (new_df["descricao"].astype(str).str.strip() != "")
+                    )
+                    new_df = new_df[mask].reset_index(drop=True)
+                    if new_df.empty:
+                        st.warning("Nenhuma regra válida encontrada no arquivo.")
+                    else:
+                        st.session_state.rules_df = new_df
+                        st.session_state._last_rules_upload = upload_sig
+                        st.success(f"{len(new_df)} regra(s) importada(s).")
+            except Exception as e:
+                st.error(f"Não foi possível ler o arquivo: {e}")
 
     edited = st.data_editor(
         st.session_state.rules_df,
