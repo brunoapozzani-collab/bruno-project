@@ -73,6 +73,7 @@ COLUMN_HINTS = {
     "descricao": ["descricao", "historico", "description", "memo", "nome"],
     "valor":     ["valor", "value", "amount", "montante", "total"],
     "conta":     ["conta", "account", "codigo", "plano de contas", "categoria"],
+    "endereco":  ["endereco", "address", "logradouro", "rua", "local"],
 }
 
 

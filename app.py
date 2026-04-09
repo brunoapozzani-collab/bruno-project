@@ -96,7 +96,7 @@ def save_uploaded(file) -> Path:
 
 
 def load_categories_df() -> pd.DataFrame:
-    empty = pd.DataFrame(columns=["palavra_chave", "categoria", "empresa"])
+    empty = pd.DataFrame(columns=["palavra_chave", "categoria", "descricao"])
     if not CONFIG_PATH.exists():
         return empty
     try:
@@ -105,17 +105,21 @@ def load_categories_df() -> pd.DataFrame:
         st.warning(f"Não foi possível ler config/categorias.xlsx ({e}). Começando vazio.")
         return empty
     df.columns = [c.lower() for c in df.columns]
-    for col in ("palavra_chave", "categoria", "empresa"):
+    for col in ("palavra_chave", "categoria", "descricao"):
         if col not in df.columns:
             df[col] = ""
-    df = df[["palavra_chave", "categoria", "empresa"]].fillna("")
+    df = df[["palavra_chave", "categoria", "descricao"]].fillna("")
     return df
 
 
 def categories_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
     """Serialize the rules editor state to an in-memory .xlsx for download."""
     df = df.copy()
-    df = df[df["palavra_chave"].astype(str).str.strip() != ""]
+    # Keep rows with at least a keyword OR a description
+    has_matcher = (
+        df["palavra_chave"].astype(str).str.strip() != ""
+    ) | (df["descricao"].astype(str).str.strip() != "")
+    df = df[has_matcher]
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False)
@@ -126,11 +130,12 @@ def categories_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
 def df_to_rules(df: pd.DataFrame) -> list[dict]:
     out = []
     for _, r in df.iterrows():
-        kw = str(r["palavra_chave"]).strip()
-        cat = str(r["categoria"]).strip()
-        emp = "" if pd.isna(r["empresa"]) else str(r["empresa"]).strip()
-        if kw and cat:
-            out.append({"kw": kw, "categoria": cat, "empresa": emp})
+        kw = "" if pd.isna(r.get("palavra_chave")) else str(r["palavra_chave"]).strip()
+        cat = "" if pd.isna(r.get("categoria")) else str(r["categoria"]).strip()
+        desc = "" if pd.isna(r.get("descricao")) else str(r["descricao"]).strip()
+        # A rule needs a categoria and at least one matcher (kw or desc).
+        if cat and (kw or desc):
+            out.append({"kw": kw, "categoria": cat, "descricao": desc})
     return out
 
 
@@ -150,11 +155,12 @@ st.caption(
 with st.sidebar:
     st.header("📚 Regras de categorias")
     st.caption(
-        "Defina aqui o que cada palavra-chave significa. Ex: **maria → Aluguel**. "
-        "O sistema procurará a palavra-chave (sem acento, sem caixa) na descrição e na "
-        "conta de cada linha do razão. Se você selecionou uma coluna de Empresa na "
-        "Seção 2, a empresa será detectada automaticamente da planilha — deixe o "
-        "campo *Empresa* das regras em branco."
+        "Defina o que cada lançamento significa. Cada regra tem **palavra-chave**, "
+        "**categoria** e **descrição** (prioritária). Se a *descrição* da regra "
+        "aparecer no texto da descrição da linha, ela vence — mesmo que uma "
+        "palavra-chave de outra regra também combine. A *palavra-chave* é o "
+        "fallback. A empresa é detectada automaticamente da coluna escolhida na "
+        "Seção 2."
     )
 
     # Initialize rules in session state on first load using the bundled sample.
@@ -166,17 +172,17 @@ with st.sidebar:
         "📤 Importar regras (.xlsx)",
         type=["xlsx"],
         key="rules_uploader",
-        help="Carregue um arquivo .xlsx com as colunas palavra_chave, categoria, empresa.",
+        help="Carregue um arquivo .xlsx com as colunas palavra_chave, categoria, descricao.",
     )
     if rules_upload is not None:
         try:
             new_df = pd.read_excel(rules_upload)
             new_df.columns = [c.lower() for c in new_df.columns]
-            for col in ("palavra_chave", "categoria", "empresa"):
+            for col in ("palavra_chave", "categoria", "descricao"):
                 if col not in new_df.columns:
                     new_df[col] = ""
             st.session_state.rules_df = (
-                new_df[["palavra_chave", "categoria", "empresa"]].fillna("")
+                new_df[["palavra_chave", "categoria", "descricao"]].fillna("")
             )
             st.success(f"{len(st.session_state.rules_df)} regra(s) importada(s).")
         except Exception as e:
@@ -187,11 +193,14 @@ with st.sidebar:
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "palavra_chave": st.column_config.TextColumn("Palavra-chave", required=True),
-            "categoria":     st.column_config.TextColumn("Categoria",     required=True),
-            "empresa":       st.column_config.TextColumn(
-                "Empresa (opcional)",
-                help="Ignorado quando a planilha tem coluna de Empresa selecionada na Seção 2.",
+            "palavra_chave": st.column_config.TextColumn(
+                "Palavra-chave",
+                help="Fallback: usado quando nenhuma regra de descrição combina.",
+            ),
+            "categoria":     st.column_config.TextColumn("Categoria", required=True),
+            "descricao":     st.column_config.TextColumn(
+                "Descrição (prioritária)",
+                help="Se este texto aparecer na descrição da linha, esta regra vence sobre qualquer palavra-chave.",
             ),
         },
         key="cat_editor",
@@ -212,10 +221,10 @@ with st.sidebar:
     categorias_disponiveis = sorted({r["categoria"] for r in rules})
     st.caption(f"📌 {len(rules)} regra(s) ativa(s) · {len(categorias_disponiveis)} categoria(s).")
     st.caption(
-        "💡 **Dica:** se sua planilha tem coluna de empresa, selecione-a na Seção 2 "
-        "e deixe *Empresa (opcional)* em branco — a empresa de cada lançamento será "
-        "lida diretamente da planilha. Use *Empresa (opcional)* apenas quando a "
-        "planilha **não** tiver coluna de empresa."
+        "💡 **Dica:** comece preenchendo apenas a *Descrição* — ela é a forma mais "
+        "precisa de classificar. Use *Palavra-chave* só quando a descrição variar "
+        "muito entre lançamentos. Para linhas sem regra, ative o sugeridor "
+        "automático (Claude) na Seção 4."
     )
     st.caption(
         "⚠️ **As regras NÃO ficam salvas no servidor.** Use **Baixar regras** ao "
@@ -347,6 +356,7 @@ with c1:
 with c2:
     col_desc = col_select("📝 Descrição", "col_desc", "descricao")
     col_conta = col_select("📂 Conta (opcional)", "col_conta", "conta")
+    col_endereco = col_select("📍 Endereço (opcional)", "col_endereco", "endereco")
 with c3:
     mode_options = ["Coluna única", "Débito + Crédito"]
     valor_mode = st.radio(
@@ -434,22 +444,13 @@ else:
     # Build the list of companies from the rules' empresa field, since the
     # ledger itself has no empresa column. Each matched row will be assigned
     # to whatever empresa its rule says.
-    rule_empresas = sorted({r["empresa"] for r in rules if r["empresa"]})
-    sel_emp = rule_empresas or ["Geral"]
+    sel_emp = ["Geral"]
     if mapping_ok:
-        if rule_empresas:
-            st.caption(
-                "ℹ️ Sua planilha não tem coluna de empresa, mas as regras na "
-                f"barra lateral atribuem cada despesa a uma empresa. "
-                f"Empresas detectadas nas regras: **{', '.join(rule_empresas)}**."
-            )
-        else:
-            st.caption(
-                "ℹ️ Sua planilha não tem coluna de empresa e nenhuma regra "
-                "atribui empresa. Todas as linhas serão agrupadas como **Geral**. "
-                "Para separar por empresa, preencha a coluna *Empresa* de cada "
-                "regra na barra lateral."
-            )
+        st.caption(
+            "ℹ️ Sua planilha não tem coluna de empresa selecionada. Todas as "
+            "linhas serão agrupadas como **Geral**. Para separar por empresa, "
+            "selecione a coluna de empresa na Seção 2."
+        )
 
 # Default period = actual min/max date in the ledger (not hardcoded previous month)
 if mapping_ok and work[col_data].notna().any():
@@ -487,6 +488,23 @@ if not rules:
         "(ex: palavra-chave **maria** → categoria **Aluguel**)."
     )
 
+_has_anthropic_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+if not _has_anthropic_key:
+    try:
+        _has_anthropic_key = bool(st.secrets.get("ANTHROPIC_API_KEY"))  # type: ignore
+    except Exception:
+        _has_anthropic_key = False
+claude_suggest = st.checkbox(
+    "🤖 Sugerir categorias automaticamente para linhas sem regra (Claude)",
+    value=_has_anthropic_key,
+    disabled=not _has_anthropic_key,
+    help=(
+        "Para linhas que nenhuma regra cobriu, envia a descrição ao Claude e usa a "
+        "categoria sugerida. Requer ANTHROPIC_API_KEY no .env (local) ou nos Secrets "
+        "do Streamlit Cloud."
+    ),
+)
+
 run_disabled = (not mapping_ok) or (not rules)
 if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_disabled):
     if not sel_emp:
@@ -522,27 +540,81 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
 
     search_cols = [col_desc] + ([col_conta] if col_conta else [])
 
+    # Heuristic regex: street/road words and CEP. If the "description" cell
+    # actually holds an address, the real description is missing or
+    # duplicated elsewhere — we should skip descrição rules and go straight
+    # to palavra-chave matching.
+    _ADDRESS_RE = re.compile(
+        r"\b(rua|r\.|av|av\.|avenida|alameda|al\.|travessa|trav\.|estrada|"
+        r"rodovia|rod\.|praca|praça|largo|viela|beco|quadra|lote|bloco|"
+        r"cep|n[º°]|num\.|numero|número)\b|\d{5}-?\d{3}",
+        re.IGNORECASE,
+    )
+
+    def description_is_address(row) -> bool:
+        if col_desc not in row.index:
+            return False
+        raw = str(row[col_desc] or "")
+        if not raw.strip():
+            return False
+        # If an address column is mapped and the description equals it, it's clearly the address.
+        if col_endereco and col_endereco in row.index:
+            addr = str(row[col_endereco] or "").strip()
+            if addr and strip_accents(addr) == strip_accents(raw):
+                return True
+        # Otherwise fall back to the regex heuristic.
+        return bool(_ADDRESS_RE.search(raw))
+
     def match_rule(row):
-        """Return (categoria, empresa_assigned) for the first matching rule, or (None, None)."""
+        """Return (categoria, empresa_assigned, source) where source is 'desc'|'kw'|None."""
+        desc_text = strip_accents(row[col_desc]) if col_desc in row.index else ""
         haystack = " ".join(strip_accents(row[c]) for c in search_cols if c in row.index)
         row_emp = str(row[col_empresa_eff]) if ledger_has_empresa else ""
-        row_emp_n = strip_accents(row_emp)
+        desc_is_addr = description_is_address(row)
+        # Pass 1: descrição rules win — UNLESS the description is actually an
+        # address, in which case the description carries no useful category
+        # signal and we go straight to palavra-chave.
+        if not desc_is_addr:
+            for rule in active_rules_for_match:
+                if rule["descricao"] and strip_accents(rule["descricao"]) in desc_text:
+                    return rule["categoria"], (row_emp or "Geral"), "desc"
+        # Pass 2: keyword fallback (also the primary path when description is an address)
         for rule in active_rules_for_match:
-            # When the ledger has its own empresa column, the row's empresa is
-            # the source of truth — rules match purely by keyword and the
-            # rule's empresa field is ignored. Without an empresa column, fall
-            # back to the rule's empresa (or "Geral").
-            if ledger_has_empresa:
-                if strip_accents(rule["kw"]) in haystack:
-                    return rule["categoria"], (row_emp or "Geral")
-            else:
-                if strip_accents(rule["kw"]) in haystack:
-                    return rule["categoria"], (rule["empresa"] or "Geral")
-        return None, None
+            if rule["kw"] and strip_accents(rule["kw"]) in haystack:
+                return rule["categoria"], (row_emp or "Geral"), "kw"
+        return None, None, None
 
     matched = filtered.apply(match_rule, axis=1)
     filtered["_categoria"] = [m[0] for m in matched]
     filtered["_empresa_assigned"] = [m[1] for m in matched]
+    filtered["_match_source"] = [m[2] for m in matched]
+
+    # Claude auto-categorization for unmatched rows (opt-in)
+    if claude_suggest and categorias_disponiveis:
+        unmatched_mask = filtered["_categoria"].isna()
+        n_unmatched = int(unmatched_mask.sum())
+        if n_unmatched > 0:
+            try:
+                from categorize_with_claude import suggest_categories
+                with st.spinner(f"🤖 Sugerindo categorias para {n_unmatched} linha(s) com Claude..."):
+                    descs = filtered.loc[unmatched_mask, col_desc].astype(str).tolist()
+                    suggestions = suggest_categories(descs, categorias_disponiveis)
+                idxs = filtered.index[unmatched_mask].tolist()
+                for i, idx in enumerate(idxs):
+                    if suggestions[i] is not None:
+                        filtered.at[idx, "_categoria"] = suggestions[i]
+                        if ledger_has_empresa:
+                            filtered.at[idx, "_empresa_assigned"] = (
+                                str(filtered.at[idx, col_empresa_eff]) or "Geral"
+                            )
+                        else:
+                            filtered.at[idx, "_empresa_assigned"] = "Geral"
+                        filtered.at[idx, "_match_source"] = "claude"
+                n_filled = sum(1 for s in suggestions if s is not None)
+                st.info(f"🤖 Claude sugeriu categoria para **{n_filled}** de {n_unmatched} linha(s) sem regra.")
+            except Exception as e:
+                st.warning(f"⚠️ Sugestão automática falhou: {e}")
+
     filtered = filtered[filtered["_categoria"].notna()].copy()
 
     # When the ledger has no empresa column, the assigned empresa BECOMES
@@ -584,11 +656,17 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
 
     # Preview table
     st.subheader(f"🔍 Prévia (50 primeiras de {len(filtered):,} — o Excel e o PDF abaixo contêm tudo)")
-    preview_cols = [col_empresa_eff, col_data, col_desc, "_categoria", "_valor_num"]
-    preview = filtered[preview_cols].rename(columns={
+    preview_cols = [col_empresa_eff, col_data, col_desc]
+    if col_endereco:
+        preview_cols.append(col_endereco)
+    preview_cols += ["_categoria", "_valor_num"]
+    preview_rename = {
         col_empresa_eff: "Empresa", col_data: "Data", col_desc: "Descrição",
         "_categoria": "Categoria", "_valor_num": "Valor",
-    })
+    }
+    if col_endereco:
+        preview_rename[col_endereco] = "Endereço"
+    preview = filtered[preview_cols].rename(columns=preview_rename)
     preview["Data"] = preview["Data"].dt.strftime("%d/%m/%Y")
     preview["Valor"] = preview["Valor"].map(fmt_brl)
     st.dataframe(preview.head(50), use_container_width=True)
@@ -602,6 +680,9 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
     if col_conta:
         cols_keep.insert(3, col_conta)
         rename[col_conta] = "Conta"
+    if col_endereco:
+        cols_keep.insert(3, col_endereco)
+        rename[col_endereco] = "Endereço"
 
     xlsx_buf = io.BytesIO()
     with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:

@@ -7,3 +7,4 @@ python-dotenv
 dropbox
 pyinstaller
 streamlit
+anthropic>=0.40.0
