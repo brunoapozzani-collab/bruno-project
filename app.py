@@ -293,13 +293,52 @@ ALLOWED_CATEGORIES: list[str] = [
     "Garagens carros Taag",
     "Cowork",
     "Depósito",
+    "Faxina",
+    "Motoboy",
 ]
 _ALLOWED_SET = set(ALLOWED_CATEGORIES)
+
+# Inline-seeded rules that are appended on top of categorias.xlsx and never
+# need to live in a file. Description-based, accent/case-insensitive.
+INLINE_RULES: list[dict] = [
+    {"palavra_chave": "", "categoria": "Faxina",  "descricao": "faxina"},
+    {"palavra_chave": "", "categoria": "Faxina",  "descricao": "limpeza"},
+    {"palavra_chave": "", "categoria": "Motoboy", "descricao": "motoboy"},
+    {"palavra_chave": "", "categoria": "Motoboy", "descricao": "moto boy"},
+]
+
+# Split rules: when a row's description contains the keyword, the row is
+# replaced by N rows, each carrying a fraction of the value and assigned to
+# a different canonical address. `override_categoria=None` keeps whatever
+# the matcher already assigned.
+SPLIT_RULES: list[dict] = [
+    {
+        "keyword": "motoboy",
+        "override_categoria": "Motoboy",
+        "allocation": [
+            ("Alameda Gabriel 470", 0.60),
+            ("Artur Azevedo",       0.40),
+        ],
+    },
+    {
+        "keyword": "supricorp",
+        "override_categoria": None,  # keep Supricorp/Gimba from the matcher
+        "allocation": [
+            ("Alameda Gabriel 470", 0.30),
+            ("Artur Azevedo",       0.30),
+            ("Alameda Gabriel 334", 0.20),
+            ("Marcenaria Mazzini",  0.10),
+            ("Rio de Janeiro",      0.10),
+        ],
+    },
+]
 
 # Headless rules: load seeded rules silently. Filter to allowed categories only.
 if "rules_df" not in st.session_state:
     st.session_state.rules_df = load_categories_df()
-rules = [r for r in df_to_rules(st.session_state.rules_df) if r["categoria"] in _ALLOWED_SET]
+_seeded = [r for r in df_to_rules(st.session_state.rules_df) if r["categoria"] in _ALLOWED_SET]
+# Inline rules go FIRST so descrição-priority picks them up before generic seeds.
+rules = [{"kw": r["palavra_chave"], "categoria": r["categoria"], "descricao": r["descricao"]} for r in INLINE_RULES] + _seeded
 categorias_disponiveis = ALLOWED_CATEGORIES.copy()
 
 # ============================================================
@@ -518,7 +557,7 @@ if mapping_ok:
                 return "Marcenaria Mazzini"
             if "azevedo" in tokens or "azvedo" in tokens:
                 return "Artur Azevedo"
-            if "rj" in tokens or ({"rio", "janeiro"} <= tokens):
+            if {"rio", "janeiro"} <= tokens:
                 return "Rio de Janeiro"
             # Number-based: within the user's known universe, 470 and 334 are
             # the only relevant street numbers and uniquely identify the two
@@ -793,6 +832,9 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
         # will assign each matched row to a company afterward.
         mask = date_mask
     filtered = work.loc[mask].copy()
+    # Defensive: if the source spreadsheet has duplicated DataFrame indices,
+    # apply() would emit two rows per source row. Drop dupes by index.
+    filtered = filtered[~filtered.index.duplicated(keep="first")].copy()
     rows_total = len(work)
     rows_in_period = len(filtered)
 
@@ -874,6 +916,36 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
                 st.warning(f"⚠️ Sugestão automática falhou: {e}")
 
     filtered = filtered[filtered["_categoria"].notna()].copy()
+
+    # ----- Split-allocation rules -----
+    # Replace each row whose description contains a split keyword with N
+    # rows split proportionally across canonical addresses.
+    def _apply_splits(df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty:
+            return df
+        new_rows: list[pd.Series] = []
+        drop_idx: list = []
+        for idx, row in df.iterrows():
+            desc_n = strip_accents(str(row.get(col_desc, ""))).lower()
+            for spec in SPLIT_RULES:
+                if spec["keyword"] in desc_n:
+                    drop_idx.append(idx)
+                    for emp, frac in spec["allocation"]:
+                        nr = row.copy()
+                        nr[col_empresa_eff] = emp
+                        nr["_valor_num"] = float(row["_valor_num"]) * frac
+                        if spec["override_categoria"]:
+                            nr["_categoria"] = spec["override_categoria"]
+                        nr["_empresa_assigned"] = emp
+                        nr["_match_source"] = "split"
+                        new_rows.append(nr)
+                    break
+        if not new_rows:
+            return df
+        kept = df.drop(index=drop_idx)
+        return pd.concat([kept, pd.DataFrame(new_rows)], ignore_index=True)
+
+    filtered = _apply_splits(filtered)
 
     # When the ledger has no empresa column, the assigned empresa BECOMES
     # the empresa column for all downstream grouping/output.

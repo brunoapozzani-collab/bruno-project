@@ -106,9 +106,11 @@ def canonicalize_addresses(raw_values: list[str], canonical: list[str]) -> dict[
         "(podem ter abreviações, vírgulas, números, complementos, erros de digitação) "
         "e uma lista de endereços canônicos. Para cada endereço cru, escolha o "
         "endereço canônico mais provável da lista. Se nenhum se encaixa claramente, "
-        "use 'Outros'. Considere que 'Focal' é sinônimo de 'Alameda Gabriel 334', "
-        "que 'RJ' é 'Rio de Janeiro', e que números de rua diferentes (470, 334) "
-        "são endereços diferentes mesmo na mesma alameda. Responda APENAS com JSON "
+        "use 'Outros'. Considere que 'Focal' é sinônimo de 'Alameda Gabriel 334' "
+        "e que números de rua diferentes (470, 334) são endereços diferentes "
+        "mesmo na mesma alameda. NÃO assuma que 'RJ' significa 'Rio de Janeiro' "
+        "— só mapeie para Rio de Janeiro quando o texto contiver claramente "
+        "'Rio de Janeiro'. Responda APENAS com JSON "
         'no formato: {"results": ["Canônico1", "Canônico2", ...]} preservando a '
         "ordem da entrada."
     )
