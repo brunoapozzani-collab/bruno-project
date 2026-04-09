@@ -895,14 +895,14 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
     # Preview table
     st.subheader(f"🔍 Prévia (50 primeiras de {len(filtered):,} — o Excel e o PDF abaixo contêm tudo)")
     preview_cols = [col_empresa_eff, col_data, col_desc]
-    if col_endereco:
+    if col_endereco and col_endereco != col_empresa_eff:
         preview_cols.append(col_endereco)
     preview_cols += ["_categoria", "_valor_num"]
     preview_rename = {
         col_empresa_eff: "Empresa", col_data: "Data", col_desc: "Descrição",
         "_categoria": "Categoria", "_valor_num": "Valor",
     }
-    if col_endereco:
+    if col_endereco and col_endereco != col_empresa_eff:
         preview_rename[col_endereco] = "Endereço"
     preview = filtered[preview_cols].rename(columns=preview_rename)
     preview["Data"] = preview["Data"].dt.strftime("%d/%m/%Y")
@@ -918,7 +918,7 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
     if col_conta:
         cols_keep.insert(3, col_conta)
         rename[col_conta] = "Conta"
-    if col_endereco:
+    if col_endereco and col_endereco != col_empresa_eff:
         cols_keep.insert(3, col_endereco)
         rename[col_endereco] = "Endereço"
 
