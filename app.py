@@ -915,15 +915,20 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
     # Preview table
     st.subheader(f"🔍 Prévia (50 primeiras de {len(filtered):,} — o Excel e o PDF abaixo contêm tudo)")
     preview_cols = [col_empresa_eff, col_data, col_desc]
-    if col_endereco and col_endereco != col_empresa_eff:
-        preview_cols.append(col_endereco)
-    preview_cols += ["_categoria", "_valor_num"]
     preview_rename = {
         col_empresa_eff: "Empresa", col_data: "Data", col_desc: "Descrição",
         "_categoria": "Categoria", "_valor_num": "Valor",
     }
-    if col_endereco and col_endereco != col_empresa_eff:
-        preview_rename[col_endereco] = "Endereço"
+    if col_conta:
+        preview_cols.append(col_conta)
+        preview_rename[col_conta] = "Conta"
+    if col_endereco and "_endereco_raw" in filtered.columns:
+        preview_cols.append("_endereco_raw")
+        preview_rename["_endereco_raw"] = "Endereço"
+    if col_favorecido:
+        preview_cols.append(col_favorecido)
+        preview_rename[col_favorecido] = "Cliente/Fornecedor"
+    preview_cols += ["_categoria", "_valor_num"]
     preview = filtered[preview_cols].rename(columns=preview_rename)
     preview["Data"] = preview["Data"].dt.strftime("%d/%m/%Y")
     preview["Valor"] = preview["Valor"].map(fmt_brl)
@@ -932,15 +937,27 @@ if st.button("🚀 Processar e gerar relatório", type="primary", disabled=run_d
     # Build outputs in memory
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    cols_keep = [col_empresa_eff, col_data, col_desc, "_categoria", "_valor_num"]
-    rename = {col_empresa_eff: "Empresa", col_data: "Data", col_desc: "Descrição",
-              "_categoria": "Categoria", "_valor_num": "Valor"}
+    # Build the export schema: Empresa, Data, Descrição, Conta, Endereço,
+    # Cliente/Fornecedor, Categoria, Valor — every column the user mapped in
+    # Section 2, in a stable order.
+    cols_keep: list[str] = [col_empresa_eff, col_data, col_desc]
+    rename: dict[str, str] = {
+        col_empresa_eff: "Empresa",
+        col_data: "Data",
+        col_desc: "Descrição",
+        "_categoria": "Categoria",
+        "_valor_num": "Valor",
+    }
     if col_conta:
-        cols_keep.insert(3, col_conta)
+        cols_keep.append(col_conta)
         rename[col_conta] = "Conta"
-    if col_endereco and col_endereco != col_empresa_eff:
-        cols_keep.insert(3, col_endereco)
-        rename[col_endereco] = "Endereço"
+    if col_endereco and "_endereco_raw" in filtered.columns:
+        cols_keep.append("_endereco_raw")
+        rename["_endereco_raw"] = "Endereço"
+    if col_favorecido:
+        cols_keep.append(col_favorecido)
+        rename[col_favorecido] = "Cliente/Fornecedor"
+    cols_keep += ["_categoria", "_valor_num"]
 
     xlsx_buf = io.BytesIO()
     with pd.ExcelWriter(xlsx_buf, engine="openpyxl") as writer:
