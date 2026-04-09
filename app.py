@@ -266,12 +266,41 @@ st.caption(
     "as categorias automaticamente e gera o relatório separado por endereço."
 )
 
-# Headless rules: load seeded rules silently. The bootstrap step (after the
-# file is loaded) will merge in any new rules suggested by Claude.
+# Fixed canonical category list. The system will ONLY use these categories;
+# any other category proposed by Claude or imported is ignored.
+ALLOWED_CATEGORIES: list[str] = [
+    "Aluguel",
+    "IPTU",
+    "Enel",
+    "Sabesp",
+    "Claro/Net",
+    "Telefone",
+    "Vivo",
+    "Hagana",
+    "Limpa vidros",
+    "Segurança",
+    "Grupo Gabriel",
+    "Sanear (diversos qdo precisa)",
+    "Supricorp/Gimba",
+    "Pão de queijo para clientes",
+    "Água personalizada para cliente",
+    "Locação de impressora+cartucho",
+    "Seguro Incêndio",
+    "Auto de licença de funcionamento",
+    "Troca Extintores",
+    "Laudo bombeiro",
+    "Galão de água",
+    "Garagens carros Taag",
+    "Cowork",
+    "Depósito",
+]
+_ALLOWED_SET = set(ALLOWED_CATEGORIES)
+
+# Headless rules: load seeded rules silently. Filter to allowed categories only.
 if "rules_df" not in st.session_state:
     st.session_state.rules_df = load_categories_df()
-rules = df_to_rules(st.session_state.rules_df)
-categorias_disponiveis = sorted({r["categoria"] for r in rules})
+rules = [r for r in df_to_rules(st.session_state.rules_df) if r["categoria"] in _ALLOWED_SET]
+categorias_disponiveis = ALLOWED_CATEGORIES.copy()
 
 # ============================================================
 # 1. SOURCE PICKER
@@ -502,36 +531,10 @@ if mapping_ok:
 
     work = work.dropna(subset=[col_data])
 
-    # ----- Auto-bootstrap rules from the file (Claude) -----
-    _has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if not _has_key:
-        try:
-            _has_key = bool(st.secrets.get("ANTHROPIC_API_KEY"))  # type: ignore
-        except Exception:
-            _has_key = False
-    _file_sig = _file_signature(excel_path)
-    _bootstrap_key = f"bootstrap_done_{_file_sig}"
-
-    should_run = _has_key and not st.session_state.get(_bootstrap_key)
-    if should_run:
-        try:
-            with st.spinner("🤖 Analisando descrições com Claude..."):
-                n_added, ambiguous = bootstrap_rules_from_work(work, col_desc, col_favorecido)
-            st.session_state[_bootstrap_key] = True
-            # Refresh rules from session state so the preview/processing pick up new rules
-            rules = df_to_rules(st.session_state.rules_df)
-            categorias_disponiveis = sorted({r["categoria"] for r in rules})
-            if n_added:
-                st.success(f"✅ {n_added} categoria(s) nova(s) detectada(s) automaticamente.")
-            if ambiguous:
-                st.info(
-                    "ℹ️ Os seguintes favorecidos apareceram com categorias diferentes "
-                    "e foram pulados como regra de palavra-chave (a descrição decidirá): "
-                    f"**{', '.join(ambiguous[:10])}**"
-                    + (f" (+{len(ambiguous)-10})" if len(ambiguous) > 10 else "")
-                )
-        except Exception as e:
-            st.warning(f"⚠️ Bootstrap automático falhou: {e}")
+    # Bootstrap (Claude inventing new categories) is disabled — the system
+    # is restricted to the fixed ALLOWED_CATEGORIES list. The Section 4
+    # auto-suggester for unmatched rows still uses Claude, but constrained
+    # to ALLOWED_CATEGORIES via suggest_categories().
 
 # ============================================================
 # 2.5  PREVIEW — descrição → categoria
