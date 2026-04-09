@@ -226,8 +226,9 @@ def categorize_descriptions(
     matches. Used by the Section 2 preview."""
     out: list[str | None] = []
     for raw in descriptions:
-        text = strip_accents(raw or "")
-        is_addr = bool(_ADDRESS_RE_GLOBAL.search(raw or "")) if (raw or "").strip() else False
+        s = "" if raw is None else str(raw)
+        text = strip_accents(s)
+        is_addr = bool(_ADDRESS_RE_GLOBAL.search(s)) if s.strip() else False
         match = None
         if not is_addr:
             for r in rules:
@@ -512,12 +513,20 @@ if mapping_ok:
             - (cre if not isinstance(cre, int) else 0)
         )
 
-    if not col_empresa:
-        work["_empresa_virtual"] = "Geral"
-        col_empresa_eff = "_empresa_virtual"
-    else:
+    # Empresa grouping: ADDRESS is the source of truth for which company a
+    # row belongs to. The "empresa" column is the trust fund (Taag) that
+    # pays everything, so it's not the actual company per row. When an
+    # address column is mapped, use it as the grouping key. Otherwise fall
+    # back to the empresa column, then to a virtual "Geral".
+    if col_endereco:
+        col_empresa_eff = col_endereco
+        work[col_empresa_eff] = work[col_empresa_eff].astype(str).fillna("Sem endereço").replace("", "Sem endereço")
+    elif col_empresa:
         col_empresa_eff = col_empresa
         work[col_empresa_eff] = work[col_empresa_eff].astype(str)
+    else:
+        work["_empresa_virtual"] = "Geral"
+        col_empresa_eff = "_empresa_virtual"
 
     work = work.dropna(subset=[col_data])
 
@@ -635,8 +644,9 @@ else:
 # Hide the empresas filter when there's no real empresa column — it would only
 # show the virtual "Geral" and confuse the user.
 has_real_empresa = mapping_ok and col_empresa_eff != "_empresa_virtual"
+_filter_label = "Endereços (empresa)" if (mapping_ok and col_endereco) else "Empresas"
 if has_real_empresa:
-    sel_emp = st.multiselect("Empresas", empresas_disp, default=empresas_disp)
+    sel_emp = st.multiselect(_filter_label, empresas_disp, default=empresas_disp)
 else:
     # Build the list of companies from the rules' empresa field, since the
     # ledger itself has no empresa column. Each matched row will be assigned
