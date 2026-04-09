@@ -521,6 +521,30 @@ if mapping_ok:
     if col_endereco:
         col_empresa_eff = col_endereco
         work[col_empresa_eff] = work[col_empresa_eff].astype(str).fillna("Sem endereço").replace("", "Sem endereço")
+
+        # ----- Canonical address aliases -----
+        # Each canonical name has a list of token-sets. A row matches a
+        # canonical address if at least one of its token-sets is fully
+        # contained in the row's normalized address (accent/space/punct
+        # insensitive). Rows that match none get "Outros".
+        ADDRESS_ALIASES: list[tuple[str, list[set[str]]]] = [
+            ("Alameda Gabriel 470",  [{"alameda", "gabriel", "470"}, {"al", "gabriel", "470"}]),
+            ("Alameda Gabriel 334",  [{"alameda", "gabriel", "334"}, {"al", "gabriel", "334"}, {"focal"}]),
+            ("Marcenaria Mazzini",   [{"marcenaria", "mazzini"}, {"mazzini"}]),
+            ("Artur Azevedo",        [{"artur", "azevedo"}, {"arthur", "azevedo"}, {"artur", "azvedo"}]),
+            ("Rio de Janeiro",       [{"rio", "janeiro"}, {"rj"}]),
+        ]
+
+        def _canon_address(raw: str) -> str:
+            n = strip_accents(str(raw))
+            tokens = set(re.findall(r"[a-z0-9]+", n))
+            for canon, sets in ADDRESS_ALIASES:
+                for s in sets:
+                    if s.issubset(tokens):
+                        return canon
+            return "Outros"
+
+        work[col_empresa_eff] = work[col_empresa_eff].apply(_canon_address)
     elif col_empresa:
         col_empresa_eff = col_empresa
         work[col_empresa_eff] = work[col_empresa_eff].astype(str)
@@ -646,7 +670,14 @@ else:
 has_real_empresa = mapping_ok and col_empresa_eff != "_empresa_virtual"
 _filter_label = "Endereços (empresa)" if (mapping_ok and col_endereco) else "Empresas"
 if has_real_empresa:
-    sel_emp = st.multiselect(_filter_label, empresas_disp, default=empresas_disp)
+    # When grouping by address, default the filter to the 5 canonical
+    # addresses only (exclude "Outros") so the user immediately sees the
+    # companies they care about.
+    if mapping_ok and col_endereco:
+        _default_emp = [e for e in empresas_disp if e != "Outros"]
+    else:
+        _default_emp = empresas_disp
+    sel_emp = st.multiselect(_filter_label, empresas_disp, default=_default_emp)
 else:
     # Build the list of companies from the rules' empresa field, since the
     # ledger itself has no empresa column. Each matched row will be assigned
