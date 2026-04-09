@@ -89,6 +89,57 @@ def _suggest_batch(client, descriptions: list[str], allowed: list[str]) -> list[
     return out
 
 
+def canonicalize_addresses(raw_values: list[str], canonical: list[str]) -> dict[str, str]:
+    """Map each unique raw address string to one of the canonical names (or 'Outros').
+
+    Sends one batched request to Claude with the unique raw values and the
+    canonical list, asking for a JSON mapping.
+    """
+    uniques = sorted({(v or "").strip() for v in raw_values if (v or "").strip()})
+    if not uniques:
+        return {}
+    client = _client()
+    numbered = "\n".join(f"{i+1}. {u}" for i, u in enumerate(uniques))
+    canonical_list = canonical + ["Outros"]
+    system = (
+        "Você normaliza endereços. Receberá uma lista numerada de endereços crus "
+        "(podem ter abreviações, vírgulas, números, complementos, erros de digitação) "
+        "e uma lista de endereços canônicos. Para cada endereço cru, escolha o "
+        "endereço canônico mais provável da lista. Se nenhum se encaixa claramente, "
+        "use 'Outros'. Considere que 'Focal' é sinônimo de 'Alameda Gabriel 334', "
+        "que 'RJ' é 'Rio de Janeiro', e que números de rua diferentes (470, 334) "
+        "são endereços diferentes mesmo na mesma alameda. Responda APENAS com JSON "
+        'no formato: {"results": ["Canônico1", "Canônico2", ...]} preservando a '
+        "ordem da entrada."
+    )
+    user = (
+        f"Endereços canônicos: {json.dumps(canonical_list, ensure_ascii=False)}\n\n"
+        f"Endereços crus ({len(uniques)}):\n{numbered}\n\nResponda apenas com o JSON."
+    )
+    msg = client.messages.create(
+        model=MODEL,
+        max_tokens=8192,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    data = json.loads(text)
+    results = data.get("results", [])
+    allowed = set(canonical_list)
+    mapping: dict[str, str] = {}
+    for i, raw in enumerate(uniques):
+        if i < len(results) and isinstance(results[i], str) and results[i] in allowed:
+            mapping[raw] = results[i]
+        else:
+            mapping[raw] = "Outros"
+    return mapping
+
+
 def propose_rules_from_rows(rows: list[dict]) -> list[dict]:
     """Bootstrap rules from a sample of ledger rows.
 

@@ -499,31 +499,80 @@ if mapping_ok:
         col_empresa_eff = col_endereco
         work[col_empresa_eff] = work[col_empresa_eff].astype(str).fillna("Sem endereço").replace("", "Sem endereço")
 
-        # ----- Canonical address aliases -----
-        # Each canonical name has a list of token-sets. A row matches a
-        # canonical address if at least one of its token-sets is fully
-        # contained in the row's normalized address (accent/space/punct
-        # insensitive). Rows that match none get "Outros".
-        ADDRESS_ALIASES: list[tuple[str, list[set[str]]]] = [
-            ("Alameda Gabriel 470",  [{"alameda", "gabriel", "470"}, {"al", "gabriel", "470"}]),
-            ("Alameda Gabriel 334",  [{"alameda", "gabriel", "334"}, {"al", "gabriel", "334"}, {"focal"}]),
-            ("Marcenaria Mazzini",   [{"marcenaria", "mazzini"}, {"mazzini"}]),
-            ("Artur Azevedo",        [{"artur", "azevedo"}, {"arthur", "azevedo"}, {"artur", "azvedo"}]),
-            ("Rio de Janeiro",       [{"rio", "janeiro"}, {"rj"}]),
+        CANONICAL_ADDRESSES = [
+            "Alameda Gabriel 470",
+            "Alameda Gabriel 334",
+            "Marcenaria Mazzini",
+            "Artur Azevedo",
+            "Rio de Janeiro",
         ]
 
-        def _canon_address(raw: str) -> str:
-            n = strip_accents(str(raw))
+        def _heuristic_canon(raw: str) -> str | None:
+            """Loose token-based first pass. Returns None when uncertain."""
+            n = strip_accents(str(raw)).lower()
             tokens = set(re.findall(r"[a-z0-9]+", n))
-            for canon, sets in ADDRESS_ALIASES:
-                for s in sets:
-                    if s.issubset(tokens):
-                        return canon
-            return "Outros"
+            # Most distinctive tokens first
+            if "focal" in tokens:
+                return "Alameda Gabriel 334"
+            if "mazzini" in tokens:
+                return "Marcenaria Mazzini"
+            if "azevedo" in tokens or "azvedo" in tokens:
+                return "Artur Azevedo"
+            if "rj" in tokens or ({"rio", "janeiro"} <= tokens):
+                return "Rio de Janeiro"
+            # Number-based: within the user's known universe, 470 and 334 are
+            # the only relevant street numbers and uniquely identify the two
+            # Alameda Gabriel addresses.
+            if "470" in tokens and ("gabriel" in tokens or "alameda" in tokens or "al" in tokens):
+                return "Alameda Gabriel 470"
+            if "334" in tokens and ("gabriel" in tokens or "alameda" in tokens or "al" in tokens):
+                return "Alameda Gabriel 334"
+            if "gabriel" in tokens and "470" in tokens:
+                return "Alameda Gabriel 470"
+            if "gabriel" in tokens and "334" in tokens:
+                return "Alameda Gabriel 334"
+            return None
 
         # Keep the raw value for diagnostics before overwriting it.
         work["_endereco_raw"] = work[col_empresa_eff].astype(str)
-        work[col_empresa_eff] = work[col_empresa_eff].apply(_canon_address)
+
+        # Pass 1: heuristic
+        heuristic_map: dict[str, str | None] = {}
+        for raw in work["_endereco_raw"].unique():
+            heuristic_map[raw] = _heuristic_canon(raw)
+
+        # Pass 2: ask Claude to canonicalize whatever the heuristic missed.
+        # Cached per file so it only runs once.
+        _addr_cache_key = f"address_map_{_file_signature(excel_path)}"
+        cached_addr_map = st.session_state.get(_addr_cache_key, {})
+        unresolved = [
+            r for r, v in heuristic_map.items()
+            if v is None and r and r.strip() and r not in cached_addr_map
+        ]
+        if unresolved:
+            _has_key_addr = bool(os.environ.get("ANTHROPIC_API_KEY"))
+            if not _has_key_addr:
+                try:
+                    _has_key_addr = bool(st.secrets.get("ANTHROPIC_API_KEY"))  # type: ignore
+                except Exception:
+                    _has_key_addr = False
+            if _has_key_addr:
+                try:
+                    from categorize_with_claude import canonicalize_addresses
+                    with st.spinner(f"🤖 Normalizando {len(unresolved)} endereço(s) com Claude..."):
+                        new_map = canonicalize_addresses(unresolved, CANONICAL_ADDRESSES)
+                    cached_addr_map.update(new_map)
+                    st.session_state[_addr_cache_key] = cached_addr_map
+                except Exception as e:
+                    st.warning(f"⚠️ Normalização de endereços falhou: {e}")
+
+        def _final_canon(raw: str) -> str:
+            v = heuristic_map.get(raw)
+            if v is not None:
+                return v
+            return cached_addr_map.get(raw, "Outros")
+
+        work[col_empresa_eff] = work["_endereco_raw"].apply(_final_canon)
     elif col_empresa:
         col_empresa_eff = col_empresa
         work[col_empresa_eff] = work[col_empresa_eff].astype(str)
