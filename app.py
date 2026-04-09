@@ -127,6 +127,89 @@ def categories_to_xlsx_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def _file_signature(p: Path) -> str:
+    try:
+        st_ = p.stat()
+        return f"{p.name}-{st_.st_size}-{int(st_.st_mtime)}"
+    except Exception:
+        return p.name
+
+
+def bootstrap_rules_from_work(work_df: pd.DataFrame, col_desc: str, col_favorecido: str | None) -> tuple[int, list[str]]:
+    """Run Claude on the last 100 rows and merge proposed rules into session state.
+
+    Returns (n_added, ambiguous_favorecidos).
+    """
+    from categorize_with_claude import propose_rules_from_rows  # lazy import
+
+    sample = work_df.tail(100).copy()
+    rows = []
+    for _, r in sample.iterrows():
+        rows.append({
+            "descricao": str(r.get(col_desc, "") or "").strip(),
+            "favorecido": str(r.get(col_favorecido, "") or "").strip() if col_favorecido else "",
+        })
+    rows = [r for r in rows if r["descricao"] or r["favorecido"]]
+    if not rows:
+        return 0, []
+    proposed = propose_rules_from_rows(rows)
+
+    # Group by favorecido → set of categorias (detect ambiguity)
+    fav_to_cats: dict[str, set[str]] = {}
+    for r in proposed:
+        fav = r.get("favorecido", "").strip()
+        if fav:
+            fav_to_cats.setdefault(fav.lower(), set()).add(r["categoria"])
+    ambiguous = sorted([k for k, v in fav_to_cats.items() if len(v) > 1])
+
+    # Build deduped rule sets
+    new_rules: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    # Description rules: shortest descricao that maps to one categoria consistently
+    desc_to_cat: dict[str, str] = {}
+    for r in proposed:
+        d = r.get("descricao", "").strip()
+        if not d:
+            continue
+        # Use first 60 chars normalized as the dedupe key for the descricao field
+        key = d[:60]
+        # Only keep if consistent
+        prev = desc_to_cat.get(key.lower())
+        if prev is None:
+            desc_to_cat[key.lower()] = r["categoria"]
+        elif prev != r["categoria"]:
+            # inconsistent — skip this descricao rule
+            desc_to_cat[key.lower()] = ""
+    for key, cat in desc_to_cat.items():
+        if not cat:
+            continue
+        new_rules.append({"palavra_chave": "", "categoria": cat, "descricao": key})
+
+    # Favorecido (palavra_chave) rules: only when unambiguous
+    for fav, cats in fav_to_cats.items():
+        if len(cats) == 1:
+            new_rules.append({"palavra_chave": fav, "categoria": next(iter(cats)), "descricao": ""})
+
+    # Merge into session state, skip duplicates by (palavra_chave, descricao)
+    cur = st.session_state.rules_df.copy()
+    existing = set(
+        (str(r["palavra_chave"]).strip().lower(), str(r["descricao"]).strip().lower())
+        for _, r in cur.iterrows()
+    )
+    added_rows = []
+    for nr in new_rules:
+        k = (nr["palavra_chave"].strip().lower(), nr["descricao"].strip().lower())
+        if k in existing or (not k[0] and not k[1]):
+            continue
+        existing.add(k)
+        added_rows.append(nr)
+    if added_rows:
+        cur = pd.concat([cur, pd.DataFrame(added_rows)], ignore_index=True)
+        st.session_state.rules_df = cur[["palavra_chave", "categoria", "descricao"]].fillna("")
+    return len(added_rows), ambiguous
+
+
 def df_to_rules(df: pd.DataFrame) -> list[dict]:
     out = []
     for _, r in df.iterrows():
@@ -357,6 +440,7 @@ with c2:
     col_desc = col_select("📝 Descrição", "col_desc", "descricao")
     col_conta = col_select("📂 Conta (opcional)", "col_conta", "conta")
     col_endereco = col_select("📍 Endereço (opcional)", "col_endereco", "endereco")
+    col_favorecido = col_select("👤 Cliente / Fornecedor / Favorecido (opcional)", "col_favorecido", "favorecido")
 with c3:
     mode_options = ["Coluna única", "Débito + Crédito"]
     valor_mode = st.radio(
@@ -424,6 +508,51 @@ if mapping_ok:
         work[col_empresa_eff] = work[col_empresa_eff].astype(str)
 
     work = work.dropna(subset=[col_data])
+
+    # ----- Auto-bootstrap rules from the file (Claude) -----
+    _has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if not _has_key:
+        try:
+            _has_key = bool(st.secrets.get("ANTHROPIC_API_KEY"))  # type: ignore
+        except Exception:
+            _has_key = False
+    _file_sig = _file_signature(excel_path)
+    _bootstrap_key = f"bootstrap_done_{_file_sig}"
+
+    with st.sidebar:
+        st.divider()
+        st.subheader("🤖 Bootstrap de regras")
+        st.caption(
+            "Analisa as últimas 100 linhas com Claude e adiciona regras "
+            "(descrição → categoria e favorecido → categoria) à lista acima. "
+            "Suas regras já existentes são preservadas."
+        )
+        manual_run = st.button(
+            "Sugerir regras automaticamente",
+            disabled=not _has_key,
+            help=("Requer ANTHROPIC_API_KEY no .env ou nos Secrets do Streamlit Cloud."
+                  if not _has_key else None),
+        )
+
+    should_run = manual_run or (_has_key and not st.session_state.get(_bootstrap_key))
+    if should_run and _has_key:
+        try:
+            with st.spinner("🤖 Sugerindo regras a partir das últimas 100 linhas..."):
+                n_added, ambiguous = bootstrap_rules_from_work(work, col_desc, col_favorecido)
+            st.session_state[_bootstrap_key] = True
+            if n_added:
+                st.success(f"✅ {n_added} regra(s) sugerida(s) adicionada(s) à barra lateral. Revise antes de processar.")
+            else:
+                st.info("Nenhuma regra nova foi sugerida (ou todas já existiam).")
+            if ambiguous:
+                st.info(
+                    "ℹ️ Os seguintes favorecidos apareceram com categorias diferentes "
+                    "e foram pulados como regra de palavra-chave (a descrição decidirá): "
+                    f"**{', '.join(ambiguous[:10])}**"
+                    + (f" (+{len(ambiguous)-10})" if len(ambiguous) > 10 else "")
+                )
+        except Exception as e:
+            st.warning(f"⚠️ Bootstrap automático falhou: {e}")
 
 # ============================================================
 # 3. FILTERS

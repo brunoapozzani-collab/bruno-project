@@ -74,6 +74,7 @@ COLUMN_HINTS = {
     "valor":     ["valor", "value", "amount", "montante", "total"],
     "conta":     ["conta", "account", "codigo", "plano de contas", "categoria"],
     "endereco":  ["endereco", "address", "logradouro", "rua", "local"],
+    "favorecido":["favorecido", "cliente", "fornecedor", "beneficiario", "beneficiário", "pagador", "razao social"],
 }
 
 

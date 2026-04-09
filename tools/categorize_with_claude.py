@@ -89,6 +89,56 @@ def _suggest_batch(client, descriptions: list[str], allowed: list[str]) -> list[
     return out
 
 
+def propose_rules_from_rows(rows: list[dict]) -> list[dict]:
+    """Bootstrap rules from a sample of ledger rows.
+
+    Each input row is `{"descricao": str, "favorecido": str}`. Returns the
+    same list with an added `"categoria"` field per row, where Claude has
+    invented a small consistent category set (Aluguel, Energia, Salários,
+    etc.) and assigned one to each row.
+    """
+    if not rows:
+        return []
+    client = _client()
+    numbered = "\n".join(
+        f"{i+1}. descrição: {r.get('descricao','')}  |  favorecido: {r.get('favorecido','')}"
+        for i, r in enumerate(rows)
+    )
+    system = (
+        "Você é um contador classificando lançamentos de um razão geral. "
+        "Receberá uma lista numerada de lançamentos com descrição e favorecido. "
+        "Invente um conjunto pequeno e consistente de categorias contábeis em português "
+        "(ex: Aluguel, Energia, Internet, Salários, Impostos, Manutenção, Marketing, "
+        "Combustível, Alimentação, Material de escritório, Tarifas bancárias, Outros). "
+        "Para cada lançamento, escolha UMA categoria. Seja consistente: descrições "
+        "ou favorecidos parecidos devem receber a mesma categoria. Responda APENAS com "
+        'JSON válido no formato: {"results": ["Categoria1", "Categoria2", ...]} '
+        "preservando a mesma ordem e o mesmo número de itens da entrada."
+    )
+    user = (
+        f"Lançamentos ({len(rows)}):\n{numbered}\n\nResponda apenas com o JSON."
+    )
+    msg = client.messages.create(
+        model=MODEL,
+        max_tokens=8192,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    data = json.loads(text)
+    results = data.get("results", [])
+    out = []
+    for i, r in enumerate(rows):
+        cat = results[i] if i < len(results) and isinstance(results[i], str) else "Outros"
+        out.append({**r, "categoria": cat or "Outros"})
+    return out
+
+
 def suggest_categories(
     descriptions: Iterable[str],
     allowed_categories: list[str],
