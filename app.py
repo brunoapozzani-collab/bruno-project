@@ -78,6 +78,7 @@ st.set_page_config(
     page_title="Extrator de Despesas Fixas",
     page_icon="📊",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 # ---------- session state ----------
@@ -261,71 +262,16 @@ def df_to_rules(df: pd.DataFrame) -> list[dict]:
 # ============================================================
 st.title("📊 Extrator de Despesas Fixas")
 st.caption(
-    "Carregue um razão geral, defina na barra lateral o que cada palavra-chave significa "
-    "(ex: \"maria\" = \"Aluguel\") e o sistema classificará automaticamente todas as linhas "
-    "correspondentes no período escolhido."
+    "Carregue um razão geral abaixo. O sistema analisa as descrições, aplica "
+    "as categorias automaticamente e gera o relatório separado por endereço."
 )
 
-# ============================================================
-# SIDEBAR — Persistent categories editor (always visible)
-# ============================================================
-with st.sidebar:
-    st.header("📚 Regras de categorias")
-    st.caption(
-        "Defina o que cada lançamento significa. Cada regra tem **palavra-chave**, "
-        "**categoria** e **descrição** (prioritária). Se a *descrição* da regra "
-        "aparecer no texto da descrição da linha, ela vence — mesmo que uma "
-        "palavra-chave de outra regra também combine. A *palavra-chave* é o "
-        "fallback. A empresa é detectada automaticamente da coluna escolhida na "
-        "Seção 2."
-    )
-
-    # Initialize rules in session state on first load using the bundled sample.
-    if "rules_df" not in st.session_state:
-        st.session_state.rules_df = load_categories_df()
-
-    edited = st.data_editor(
-        st.session_state.rules_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "palavra_chave": st.column_config.TextColumn(
-                "Palavra-chave",
-                help="Fallback: usado quando nenhuma regra de descrição combina.",
-            ),
-            "categoria":     st.column_config.TextColumn("Categoria", required=True),
-            "descricao":     st.column_config.TextColumn(
-                "Descrição (prioritária)",
-                help="Se este texto aparecer na descrição da linha, esta regra vence sobre qualquer palavra-chave.",
-            ),
-        },
-        key="cat_editor",
-    )
-    # Keep session state in sync with edits so a download grabs latest content
-    st.session_state.rules_df = edited
-
-    st.download_button(
-        "📥 Baixar regras (.xlsx)",
-        data=categories_to_xlsx_bytes(edited),
-        file_name="categorias.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        help="Salve este arquivo no seu computador. Na próxima visita, importe-o novamente.",
-    )
-
-    rules = df_to_rules(edited)
-    categorias_disponiveis = sorted({r["categoria"] for r in rules})
-    st.caption(f"📌 {len(rules)} regra(s) ativa(s) · {len(categorias_disponiveis)} categoria(s).")
-    st.caption(
-        "💡 **Dica:** comece preenchendo apenas a *Descrição* — ela é a forma mais "
-        "precisa de classificar. Use *Palavra-chave* só quando a descrição variar "
-        "muito entre lançamentos. Para linhas sem regra, ative o sugeridor "
-        "automático (Claude) na Seção 4."
-    )
-    st.caption(
-        "⚠️ **As regras NÃO ficam salvas no servidor.** Use **Baixar regras** ao "
-        "terminar e **Importar regras** na próxima visita."
-    )
+# Headless rules: load seeded rules silently. The bootstrap step (after the
+# file is loaded) will merge in any new rules suggested by Claude.
+if "rules_df" not in st.session_state:
+    st.session_state.rules_df = load_categories_df()
+rules = df_to_rules(st.session_state.rules_df)
+categorias_disponiveis = sorted({r["categoria"] for r in rules})
 
 # ============================================================
 # 1. SOURCE PICKER
@@ -566,31 +512,17 @@ if mapping_ok:
     _file_sig = _file_signature(excel_path)
     _bootstrap_key = f"bootstrap_done_{_file_sig}"
 
-    with st.sidebar:
-        st.divider()
-        st.subheader("🤖 Bootstrap de regras")
-        st.caption(
-            "Analisa as últimas 100 linhas com Claude e adiciona regras "
-            "(descrição → categoria e favorecido → categoria) à lista acima. "
-            "Suas regras já existentes são preservadas."
-        )
-        manual_run = st.button(
-            "Sugerir regras automaticamente",
-            disabled=not _has_key,
-            help=("Requer ANTHROPIC_API_KEY no .env ou nos Secrets do Streamlit Cloud."
-                  if not _has_key else None),
-        )
-
-    should_run = manual_run or (_has_key and not st.session_state.get(_bootstrap_key))
-    if should_run and _has_key:
+    should_run = _has_key and not st.session_state.get(_bootstrap_key)
+    if should_run:
         try:
-            with st.spinner("🤖 Sugerindo regras a partir das últimas 100 linhas..."):
+            with st.spinner("🤖 Analisando descrições com Claude..."):
                 n_added, ambiguous = bootstrap_rules_from_work(work, col_desc, col_favorecido)
             st.session_state[_bootstrap_key] = True
+            # Refresh rules from session state so the preview/processing pick up new rules
+            rules = df_to_rules(st.session_state.rules_df)
+            categorias_disponiveis = sorted({r["categoria"] for r in rules})
             if n_added:
-                st.success(f"✅ {n_added} regra(s) sugerida(s) adicionada(s) à barra lateral. Revise antes de processar.")
-            else:
-                st.info("Nenhuma regra nova foi sugerida (ou todas já existiam).")
+                st.success(f"✅ {n_added} categoria(s) nova(s) detectada(s) automaticamente.")
             if ambiguous:
                 st.info(
                     "ℹ️ Os seguintes favorecidos apareceram com categorias diferentes "
