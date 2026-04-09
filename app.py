@@ -512,6 +512,8 @@ if mapping_ok:
             (deb if not isinstance(deb, int) else 0)
             - (cre if not isinstance(cre, int) else 0)
         )
+    # Show expenses as positive amounts everywhere (preview, charts, export, PDF).
+    work["_valor_num"] = work["_valor_num"].abs()
 
     # Empresa grouping: ADDRESS is the source of truth for which company a
     # row belongs to. The "empresa" column is the trust fund (Taag) that
