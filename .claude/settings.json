@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'for d in \"${CODEBRIDGE_HOME}\" \"${CLAUDE_PLUGIN_ROOT}\" \"${CLAUDE_PROJECT_DIR}/codebridge-kit\" \"${CLAUDE_PROJECT_DIR}/../codebridge-kit\" \"${HOME}/codebridge-kit\" \"${HOME}/projects/apps/codebridge-kit\" \"${HOME}/Desktop/Projects/codebridge-kit\"; do [ -r \"$d/hooks/guard-danger.sh\" ] && exec bash \"$d/hooks/guard-danger.sh\"; done; echo \"codebridge: cannot find guard-danger.sh - set CODEBRIDGE_HOME\" >&2; exit 2'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'for d in \"${CODEBRIDGE_HOME}\" \"${CLAUDE_PLUGIN_ROOT}\" \"${CLAUDE_PROJECT_DIR}/codebridge-kit\" \"${CLAUDE_PROJECT_DIR}/../codebridge-kit\" \"${HOME}/codebridge-kit\" \"${HOME}/projects/apps/codebridge-kit\" \"${HOME}/Desktop/Projects/codebridge-kit\"; do [ -r \"$d/hooks/post-write-invariant.sh\" ] && exec bash \"$d/hooks/post-write-invariant.sh\"; done; echo \"codebridge: cannot find post-write-invariant.sh - set CODEBRIDGE_HOME\" >&2; exit 1'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'for d in \"${CODEBRIDGE_HOME}\" \"${CLAUDE_PLUGIN_ROOT}\" \"${CLAUDE_PROJECT_DIR}/codebridge-kit\" \"${CLAUDE_PROJECT_DIR}/../codebridge-kit\" \"${HOME}/codebridge-kit\" \"${HOME}/projects/apps/codebridge-kit\" \"${HOME}/Desktop/Projects/codebridge-kit\"; do [ -r \"$d/hooks/evidence-gate.sh\" ] && exec bash \"$d/hooks/evidence-gate.sh\"; done; echo \"codebridge: cannot find evidence-gate.sh - set CODEBRIDGE_HOME\" >&2; exit 1'"
+          }
+        ]
+      }
+    ]
+  }
+}

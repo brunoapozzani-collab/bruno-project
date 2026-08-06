@@ -1,0 +1,60 @@
+# codebridge.yml — the entire configuration surface of the kit.
+#
+# TEN questions. Nothing else is asked of a project, ever. Every key has a
+# working default, so a project that answers none of them still gets the
+# universal half of the kit (destructive-git guard, secret guard, push-to-main
+# guard, the ratchet, the classifier, the friction log).
+#
+# ---------------------------------------------------------------------------
+# THE ONE RULE OF THIS FILE
+#
+#   Configuration can only ADD danger. It can never remove it.
+#
+# There is no key here that turns a guard off. `danger.extra` appends patterns;
+# it cannot delete the built-in ones. `verify.browser: false` skips the
+# screenshot requirement but not the evidence requirement. A project cannot
+# configure its way out of the wall — only into a stricter version of it.
+# ---------------------------------------------------------------------------
+
+# 1. What is this project called? (used in guard messages and PR comments)
+name: "example-project"
+
+# 2. What is it built with? One of: django | next | node | python | static | other
+#    Sets the default test command and the default "production path" file
+#    patterns the classifier treats as BRUNO-class.
+stack: "other"
+
+# 3. Where does it deploy? The URL a human would open to see it running.
+#    Write "none" for a project that does not deploy anywhere yet.
+#    Evidence must be captured against THIS url, not localhost.
+deploy_url: "none"
+
+# 4. Which branch deploys? Direct pushes to it are blocked; PRs are required.
+deploy_branch: "main"
+
+# 5. How is it verified? The one command that proves nothing is broken.
+#    Leave empty to inherit the default for `stack`.
+verify_command: ""
+
+# 6. Does it have screens a person looks at? true | false
+#    true  -> evidence must name a screenshot that exists on disk
+#    false -> evidence must still exist, but prose alone satisfies it
+verify_browser: true
+
+# 7. What is dangerous in THIS project, beyond the universal danger list?
+#    Plain lowercase substrings or regexes, matched against any command.
+#    The universal list (migrations, prod writes, money, stock, third-party
+#    sends, irreversible actions) is always on and is not listed here.
+danger_extra:
+  # - "manage.py ajusta_estoque"
+  # - "api\\.stripe\\.com"
+
+# 8. Which files hold secrets? Printing any of them is blocked.
+secret_files:
+  - ".env"
+
+# 9. Who approves the things automation may never do?
+approver: "Bruno"
+
+# 10. Where does evidence live, relative to the repo root?
+evidence_dir: "docs/evidence"
