@@ -50,5 +50,5 @@ jobs:
           echo ""
           echo "   This commit was not produced by merging a pull request."
           echo "   The push is NOT reverted — the record simply shows it was irregular,"
-          echo "   and the owner receives an email."
+          echo "   and Bruno receives an email."
           exit 1

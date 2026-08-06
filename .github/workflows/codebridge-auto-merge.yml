@@ -86,17 +86,22 @@ jobs:
           echo "pr_class=$PR_CLASS" >> "$GITHUB_OUTPUT"
 
           if [ "$PR_CLASS" = "BRUNO" ]; then
-            BREAKDOWN=$(echo "$RESULT" | python3 -c '
-import sys, json
-d = json.load(sys.stdin)
-for path, cls in sorted(d["files"].items()):
-    print(f"- **{cls}**: `{path}`")
-')
-            gh pr comment "$PR" --body "## Classifier verdict: BRUNO
-
-This pull request contains files that require the owner's review. Auto-merge is not available.
-
-$BREAKDOWN"
+            # Kept to ONE line on purpose. A `run: |` block scalar ends at the
+            # first non-blank line that is not indented, so the multi-line
+            # python that used to sit here — at column 0 — terminated the scalar
+            # and made this whole workflow file invalid YAML. GitHub reported
+            # only "this run likely failed because of a workflow file issue",
+            # and the job never ran: no classifier, no ratchet, no self-test, no
+            # verification. The gate had been absent, not passing.
+            BREAKDOWN=$(echo "$RESULT" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(chr(10).join(f"- **{c}**: `{p}`" for p, c in sorted(d["files"].items())))')
+            {
+              echo "## Classifier verdict: BRUNO"
+              echo ""
+              echo "This pull request contains files that require Bruno's review. Auto-merge is not available."
+              echo ""
+              echo "$BREAKDOWN"
+            } > "$RUNNER_TEMP/codebridge-verdict.md"
+            gh pr comment "$PR" --body-file "$RUNNER_TEMP/codebridge-verdict.md"
             echo "PR requires review. Stopping."
             exit 1
           fi
@@ -122,11 +127,19 @@ $BREAKDOWN"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           CMD=$(python3 "$CODEBRIDGE_HOME/lib/config.py" \
                 | python3 -c 'import sys,json;print(json.load(sys.stdin)["verify_command"])')
+          # An absent verify_command used to be a ::warning:: followed by exit 0,
+          # so a project that had configured no verification auto-merged anyway —
+          # and the merge comment below then told the record that "verification is
+          # green". Nothing had run. Unverifiable is not the same as verified, and
+          # this is the step that decides whether the PR merges.
           if [ -z "$CMD" ]; then
-            echo "::warning::No verify_command configured in codebridge.yml — nothing was run."
-            exit 0
+            echo "::error::No verify_command configured in codebridge.yml, so nothing"
+            echo "was verified. Auto-merge requires a verification command that passes."
+            echo "Set verify_command in codebridge.yml, or merge this PR by hand."
+            exit 1
           fi
           echo "Running: $CMD"
           bash -c "$CMD"
@@ -138,12 +151,18 @@ $BREAKDOWN"
           PR_CLASS: ${{ steps.classify.outputs.pr_class }}
         run: |
           TITLE=$(gh pr view "$PR" --json title --jq .title)
-          gh pr comment "$PR" --body "## Auto-merged by codebridge
-
-**Class:** $PR_CLASS
-**Reason:** every changed file is within the auto-upgrade criteria, the ratchet passed, evidence is present and verification is green.
-
-System upgrades — rules, recipes, tools, alarms, docs, skills, subagents, tests — merge automatically. Irreversible business actions remain the owner's permanently."
+          # Same block-scalar rule as the classifier step above: every line here
+          # must stay indented, so the comment is assembled rather than written
+          # as a multi-line double-quoted string.
+          {
+            echo "## Auto-merged by codebridge"
+            echo ""
+            echo "**Class:** $PR_CLASS"
+            echo "**Reason:** every changed file is within the auto-upgrade criteria, the ratchet passed, evidence is present and verification is green."
+            echo ""
+            echo "System upgrades — rules, recipes, tools, alarms, docs, skills, subagents, tests — merge automatically. Irreversible business actions remain Bruno's permanently."
+          } > "$RUNNER_TEMP/codebridge-merged.md"
+          gh pr comment "$PR" --body-file "$RUNNER_TEMP/codebridge-merged.md"
 
           # --auto needs branch protection + allow_auto_merge, both unavailable
           # on a free private plan. Everything above has already been validated.
